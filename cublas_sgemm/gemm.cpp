@@ -63,7 +63,7 @@ int single_stream(int use_tensorcore, int matrix_size) {
 	int min_m_k_n = 2;
 	int max_m_k_n = 4096 * 4;
 	min_m_k_n = max_m_k_n = matrix_size;
-	int repeats = 1;
+	int repeats = 100;
 	int verbose = 1;
 
 #ifndef FP16MM
@@ -146,14 +146,18 @@ int single_stream(int use_tensorcore, int matrix_size) {
 
 	for (int size = min_m_k_n; size <= max_m_k_n; size = size * 2) {
 		double sum = 0.0;
-		nvmlAPIRun();
+		
 
 		for (int rep = 0; rep < repeats; rep++) {
-			cudaEventRecord(start, 0);
+			
 			m = n = k = size;
 			lda = m;
 			ldb = k;
 			ldc = m;
+			if (rep == repeats - 1) {
+				nvmlAPIRun();
+				cudaEventRecord(start, 0);
+			}
 #ifndef FP16MM
 			stat = cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, alpha, d_A, lda, d_B, ldb, beta, d_C, ldc);
 #else
@@ -167,12 +171,14 @@ int single_stream(int use_tensorcore, int matrix_size) {
 			}
 			assert(!cudaGetLastError());
 
-			float elapsed;
-			cudaEventElapsedTime(&elapsed, start, stop);
-			elapsed /= 1000.0f;
-			sum += elapsed;
+			if (rep == repeats - 1) {
+				float elapsed;
+				cudaEventElapsedTime(&elapsed, start, stop);
+				elapsed /= 1000.0f;
+				sum = elapsed;
+				nvmlAPIEnd();
+			}
 		}
-		nvmlAPIEnd();
 
 #ifndef FP16MM	
 		cout << "float32: size "
@@ -200,7 +206,7 @@ int multi_stream(int num_streams, int use_tensorcore, int matrix_size) {
 	int min_m_k_n = 2;
 	int max_m_k_n = 4096 * 4;
 	min_m_k_n = max_m_k_n = matrix_size;
-	int repeats = 1;
+	int repeats = 100;
 	int verbose = 1;
 
 #ifndef FP16MM
@@ -227,12 +233,14 @@ int multi_stream(int num_streams, int use_tensorcore, int matrix_size) {
 		checkCublas(cublasCreate(&vecHandle[i]));
 
 	if (use_tensorcore == 1) {
+#if 0
+		if (num_streams == 2)
+			checkCublas(cublasSetMathMode(vecHandle[1], CUBLAS_TENSOR_OP_MATH));
+#else
 		for (int i = 0; i < num_streams; i++) {
 			checkCublas(cublasSetMathMode(vecHandle[i], CUBLAS_TENSOR_OP_MATH));
 		}
-		//checkCublas(cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH));
-		//checkCublas(cublasSetMathMode(handle, CUBLAS_DEFAULT_MATH));
-		//checkCublas(cublasSetMathMode(handle, CUBLAS_TF32_TENSOR_OP_MATH));
+#endif
 	}
 
 	if (verbose) cout << "allocating device variables" << endl;
@@ -300,14 +308,18 @@ int multi_stream(int num_streams, int use_tensorcore, int matrix_size) {
 	{
 		const int size = matrix_size;
 		double sum = 0.0;
-		nvmlAPIRun();
-
+		
 		for (int rep = 0; rep < repeats; rep++) {
-			cudaEventRecord(start, 0);
+			
 			m = n = k = matrix_size;
 			lda = m;
 			ldb = k;
 			ldc = m;
+
+			if (repeats - 1 == rep) {
+				nvmlAPIRun();
+				cudaEventRecord(start, 0);
+			}
 
 			for (int i = 0; i < num_streams; i++) {
 				stat = cublasSgemm(vecHandle[i], CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, alpha, vec_d_A[i], lda, vec_d_B[i], ldb, beta, vec_d_C[i], ldc);
@@ -326,12 +338,14 @@ int multi_stream(int num_streams, int use_tensorcore, int matrix_size) {
 			}
 			assert(!cudaGetLastError());
 
-			float elapsed;
-			cudaEventElapsedTime(&elapsed, start, stop);
-			elapsed /= 1000.0f;
-			sum += elapsed;
+			if (repeats - 1 == rep) {
+				float elapsed;
+				cudaEventElapsedTime(&elapsed, start, stop);
+				elapsed /= 1000.0f;
+				sum = elapsed;
+				nvmlAPIEnd();
+			}
 		}
-		nvmlAPIEnd();
 
 #ifndef FP16MM	
 		cout << "float32: size "
