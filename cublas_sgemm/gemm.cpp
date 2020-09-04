@@ -227,20 +227,29 @@ int multi_stream(int num_streams, int use_tensorcore, int matrix_size) {
 	cublasStatus_t stat;
 	cublasHandle_t handle;
 
+	vector<cudaStream_t> vecStreams(num_streams);
+	for (int i = 0; i < num_streams; i++) {
+		cudaStreamCreate(&vecStreams[i]);
+	}
 	vector<cublasHandle_t> vecHandle(num_streams);
 
 	for (int i=0; i< num_streams; i++)
 		checkCublas(cublasCreate(&vecHandle[i]));
 
 	if (use_tensorcore == 1) {
-#if 0
-		if (num_streams == 2)
+#if 1
+		if (num_streams == 2) {
 			checkCublas(cublasSetMathMode(vecHandle[1], CUBLAS_TENSOR_OP_MATH));
+		}
 #else
 		for (int i = 0; i < num_streams; i++) {
 			checkCublas(cublasSetMathMode(vecHandle[i], CUBLAS_TENSOR_OP_MATH));
 		}
 #endif
+	}
+
+	for (int i = 0; i < num_streams; i++) {
+		cublasSetStream(vecHandle[i], vecStreams[i]);
 	}
 
 	if (verbose) cout << "allocating device variables" << endl;
