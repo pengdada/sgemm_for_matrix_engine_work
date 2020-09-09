@@ -105,9 +105,9 @@ int single_stream(int use_tensorcore, int matrix_size) {
 #ifndef FP16MM
 	// Allocate 3 arrays on GPU
 	float *d_A, *d_B, *d_C;
-	checkCuda(cudaMallocManaged(&d_A, max_m_k_n * max_m_k_n * sizeof(float)));
-	checkCuda(cudaMallocManaged(&d_B, max_m_k_n * max_m_k_n * sizeof(float)));
-	checkCuda(cudaMallocManaged(&d_C, max_m_k_n * max_m_k_n * sizeof(float)));
+	checkCuda(cudaMalloc(&d_A, max_m_k_n * max_m_k_n * sizeof(float)));
+	checkCuda(cudaMalloc(&d_B, max_m_k_n * max_m_k_n * sizeof(float)));
+	checkCuda(cudaMalloc(&d_C, max_m_k_n * max_m_k_n * sizeof(float)));
 
 	checkCuda(cudaMemcpy(d_A, h_A, max_m_k_n * max_m_k_n * sizeof(float), cudaMemcpyHostToDevice));
 	checkCuda(cudaMemcpy(d_B, h_B, max_m_k_n * max_m_k_n * sizeof(float), cudaMemcpyHostToDevice));
@@ -122,9 +122,9 @@ int single_stream(int use_tensorcore, int matrix_size) {
 #else
 
 	__half *d_A, *d_B, *d_C;
-	checkCuda(cudaMallocManaged(&d_A, max_m_k_n * max_m_k_n * sizeof(__half)));
-	checkCuda(cudaMallocManaged(&d_B, max_m_k_n * max_m_k_n * sizeof(__half)));
-	checkCuda(cudaMallocManaged(&d_C, max_m_k_n * max_m_k_n * sizeof(__half)));
+	checkCuda(cudaMalloc(&d_A, max_m_k_n * max_m_k_n * sizeof(__half)));
+	checkCuda(cudaMalloc(&d_B, max_m_k_n * max_m_k_n * sizeof(__half)));
+	checkCuda(cudaMalloc(&d_C, max_m_k_n * max_m_k_n * sizeof(__half)));
 
 	for (int i = 0; i < max_m_k_n * max_m_k_n; i++) {
 		d_A[i] = approx_float_to_half(h_A[i]);
@@ -250,7 +250,7 @@ int multi_stream(int num_streams, int use_tensorcore, int matrix_size) {
 	}
 
 	for (int i = 0; i < num_streams; i++) {
-		cublasSetStream(vecHandle[i], vecStreams[i]);
+		checkCublas(cublasSetStream(vecHandle[i], vecStreams[i]));
 	}
 
 	if (verbose) cout << "allocating device variables" << endl;
@@ -269,9 +269,9 @@ int multi_stream(int num_streams, int use_tensorcore, int matrix_size) {
 	// Allocate 3 arrays on GPU
 	float *d_A, *d_B, *d_C;
 	vector<float*> vec_d_A(num_streams), vec_d_B(num_streams), vec_d_C(num_streams);
-	checkCuda(cudaMallocManaged(&d_A, max_m_k_n * max_m_k_n * sizeof(float)*num_streams));
-	checkCuda(cudaMallocManaged(&d_B, max_m_k_n * max_m_k_n * sizeof(float)*num_streams));
-	checkCuda(cudaMallocManaged(&d_C, max_m_k_n * max_m_k_n * sizeof(float)*num_streams));
+	checkCuda(cudaMalloc(&d_A, max_m_k_n * max_m_k_n * sizeof(float)*num_streams));
+	checkCuda(cudaMalloc(&d_B, max_m_k_n * max_m_k_n * sizeof(float)*num_streams));
+	checkCuda(cudaMalloc(&d_C, max_m_k_n * max_m_k_n * sizeof(float)*num_streams));
 
 	checkCuda(cudaMemcpy(d_A, h_A, max_m_k_n * max_m_k_n * sizeof(float)*num_streams, cudaMemcpyHostToDevice));
 	checkCuda(cudaMemcpy(d_B, h_B, max_m_k_n * max_m_k_n * sizeof(float)*num_streams, cudaMemcpyHostToDevice));
@@ -292,9 +292,9 @@ int multi_stream(int num_streams, int use_tensorcore, int matrix_size) {
 #else
 
 	__half *d_A, *d_B, *d_C;
-	checkCuda(cudaMallocManaged(&d_A, max_m_k_n * max_m_k_n * sizeof(__half)));
-	checkCuda(cudaMallocManaged(&d_B, max_m_k_n * max_m_k_n * sizeof(__half)));
-	checkCuda(cudaMallocManaged(&d_C, max_m_k_n * max_m_k_n * sizeof(__half)));
+	checkCuda(cudaMalloc(&d_A, max_m_k_n * max_m_k_n * sizeof(__half)));
+	checkCuda(cudaMalloc(&d_B, max_m_k_n * max_m_k_n * sizeof(__half)));
+	checkCuda(cudaMalloc(&d_C, max_m_k_n * max_m_k_n * sizeof(__half)));
 
 	for (int i = 0; i < max_m_k_n * max_m_k_n; i++) {
 		d_A[i] = approx_float_to_half(h_A[i]);
