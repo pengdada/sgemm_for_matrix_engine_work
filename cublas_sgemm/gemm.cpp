@@ -163,6 +163,7 @@ int single_stream(int use_tensorcore, int matrix_size) {
 #else
 			stat = cublasHgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, alpha, d_A, lda, d_B, ldb, beta, d_C, ldc);
 #endif
+			cudaDeviceSynchronize();
 			cudaEventRecord(stop, 0);
 			cudaEventSynchronize(stop);
 			if (stat != CUBLAS_STATUS_SUCCESS) {
@@ -339,6 +340,7 @@ int multi_stream(int num_streams, int use_tensorcore, int matrix_size) {
 //#else
 //			stat = cublasHgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, alpha, d_A, lda, d_B, ldb, beta, d_C, ldc);
 //#endif
+			cudaDeviceSynchronize();
 			cudaEventRecord(stop, 0);
 			cudaEventSynchronize(stop);
 			if (stat != CUBLAS_STATUS_SUCCESS) {
