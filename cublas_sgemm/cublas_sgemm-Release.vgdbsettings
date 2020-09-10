@@ -30,7 +30,11 @@
         <string>*.mak</string>
         <string>Makefile</string>
         <string>*.txt</string>
-        <string>*.cmake,*.cu,*.cuh,*.run,*.sh</string>
+        <string>*.cmake</string>
+        <string>*.cu</string>
+        <string>*.cuh</string>
+        <string>*.run</string>
+        <string>*.sh</string>
       </FileMasks>
       <TransferNewFilesOnly>true</TransferNewFilesOnly>
       <IncludeSubdirectories>true</IncludeSubdirectories>

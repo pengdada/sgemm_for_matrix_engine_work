@@ -59,11 +59,10 @@ inline void CPU_fill_rand(float *A, int nr_rows_A, int nr_cols_A) {
 	}
 }
 
-int single_stream(int use_tensorcore, int matrix_size) {
+int single_stream(int use_tensorcore, int matrix_size, int repeats = 10) {
 	int min_m_k_n = 2;
 	int max_m_k_n = 4096 * 4;
 	min_m_k_n = max_m_k_n = matrix_size;
-	int repeats = 100;
 	int verbose = 1;
 
 #ifndef FP16MM
@@ -144,10 +143,10 @@ int single_stream(int use_tensorcore, int matrix_size) {
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
 
-	for (int size = min_m_k_n; size <= max_m_k_n; size = size * 2) {
+	const int size = min_m_k_n;
+	{
 		double sum = 0.0;
 		
-
 		for (int rep = 0; rep < repeats; rep++) {
 			
 			m = n = k = size;
@@ -162,15 +161,10 @@ int single_stream(int use_tensorcore, int matrix_size) {
 			stat = cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, alpha, d_A, lda, d_B, ldb, beta, d_C, ldc);
 #else
 			stat = cublasHgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, alpha, d_A, lda, d_B, ldb, beta, d_C, ldc);
-#endif
+#endif			
 			cudaDeviceSynchronize();
 			cudaEventRecord(stop, 0);
 			cudaEventSynchronize(stop);
-			if (stat != CUBLAS_STATUS_SUCCESS) {
-				cerr << "cublasSgemmBatched failed" << endl;
-				exit(1);
-			}
-			assert(!cudaGetLastError());
 
 			if (rep == repeats - 1) {
 				float elapsed;
@@ -179,6 +173,14 @@ int single_stream(int use_tensorcore, int matrix_size) {
 				sum = elapsed;
 				nvmlAPIEnd();
 			}
+			if (stat != CUBLAS_STATUS_SUCCESS) {
+				cerr << "cublasSgemmBatched failed" << endl;
+				exit(1);
+			}
+			assert(!cudaGetLastError());
+			
+			std::swap(d_A, d_C);
+	
 		}
 
 #ifndef FP16MM	
@@ -186,9 +188,13 @@ int single_stream(int use_tensorcore, int matrix_size) {
 #else
 		cout << "float16: size "
 #endif
-			<< size << " average: " << sum / repeats << " s " << endl;
+			<< size << " average: " << sum  << " s " << endl;
 
 	}
+
+	checkCuda(cudaMemcpy(h_A, d_A, max_m_k_n * max_m_k_n * sizeof(float), cudaMemcpyDeviceToHost));
+	checkCuda(cudaMemcpy(h_B, d_B, max_m_k_n * max_m_k_n * sizeof(float), cudaMemcpyDeviceToHost));
+	checkCuda(cudaMemcpy(h_C, d_C, max_m_k_n * max_m_k_n * sizeof(float), cudaMemcpyDeviceToHost));
 
 	//Free GPU memory
 	cudaFree(d_A);
@@ -203,11 +209,10 @@ int single_stream(int use_tensorcore, int matrix_size) {
 	return 0;
 }
 
-int multi_stream(int num_streams, int use_tensorcore, int matrix_size) {
+int multi_stream(int num_streams, int use_tensorcore, int matrix_size, int repeats = 10) {
 	int min_m_k_n = 2;
 	int max_m_k_n = 4096 * 4;
 	min_m_k_n = max_m_k_n = matrix_size;
-	int repeats = 100;
 	int verbose = 1;
 
 #ifndef FP16MM
@@ -225,7 +230,7 @@ int multi_stream(int num_streams, int use_tensorcore, int matrix_size) {
 		<< " repeats: " << repeats
 		<< endl;
 
-	cublasStatus_t stat;
+	vector<cublasStatus_t> vecstat(num_streams);
 	cublasHandle_t handle;
 
 	vector<cudaStream_t> vecStreams(num_streams);
@@ -332,7 +337,7 @@ int multi_stream(int num_streams, int use_tensorcore, int matrix_size) {
 			}
 
 			for (int i = 0; i < num_streams; i++) {
-				stat = cublasSgemm(vecHandle[i], CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, alpha, vec_d_A[i], lda, vec_d_B[i], ldb, beta, vec_d_C[i], ldc);
+				vecstat[i] = cublasSgemm(vecHandle[i], CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, alpha, vec_d_A[i], lda, vec_d_B[i], ldb, beta, vec_d_C[i], ldc);
 			}
 
 //#ifndef FP16MM
@@ -343,11 +348,6 @@ int multi_stream(int num_streams, int use_tensorcore, int matrix_size) {
 			cudaDeviceSynchronize();
 			cudaEventRecord(stop, 0);
 			cudaEventSynchronize(stop);
-			if (stat != CUBLAS_STATUS_SUCCESS) {
-				cerr << "cublasSgemmBatched failed" << endl;
-				exit(1);
-			}
-			assert(!cudaGetLastError());
 
 			if (repeats - 1 == rep) {
 				float elapsed;
@@ -356,6 +356,18 @@ int multi_stream(int num_streams, int use_tensorcore, int matrix_size) {
 				sum = elapsed;
 				nvmlAPIEnd();
 			}
+
+			for (int i = 0; i < num_streams; i++) {
+				auto& stat = vecstat[i];
+				if (stat != CUBLAS_STATUS_SUCCESS) {
+					cerr << "cublasSgemmBatched failed" << endl;
+					exit(1);
+				}
+				assert(!cudaGetLastError());
+			}
+			for (int i = 0; i < num_streams; i++) {
+				std::swap(vec_d_A[i], vec_d_C[i]);
+			}
 		}
 
 #ifndef FP16MM	
@@ -363,9 +375,13 @@ int multi_stream(int num_streams, int use_tensorcore, int matrix_size) {
 #else
 		cout << "float16: size "
 #endif
-			<< size << " average: " << sum / repeats << " s " << endl;
+			<< size << " average: " << sum  << " s " << endl;
 
 	}
+
+	checkCuda(cudaMemcpy(h_A, d_A, max_m_k_n * max_m_k_n * sizeof(float)*num_streams, cudaMemcpyDeviceToHost));
+	checkCuda(cudaMemcpy(h_B, d_B, max_m_k_n * max_m_k_n * sizeof(float)*num_streams, cudaMemcpyDeviceToHost));
+	checkCuda(cudaMemcpy(h_C, d_C, max_m_k_n * max_m_k_n * sizeof(float)*num_streams, cudaMemcpyDeviceToHost));
 
 	//Free GPU memory
 	cudaFree(d_A);
@@ -383,16 +399,18 @@ int multi_stream(int num_streams, int use_tensorcore, int matrix_size) {
 int main(int argc, char ** argv) {
 	int num_streams = 1;
 	int use_tensor_core = 0;
+	int repeats = 1;
 	int matrix_size = 1024 * 1;
-	if (argc == 4) {
+	if (argc == 5) {
 		num_streams = atoi(argv[1]);
 		use_tensor_core = atoi(argv[2]);
-		matrix_size = atoi(argv[3]);
+		repeats = atoi(argv[3]);
+		matrix_size = atoi(argv[4]);
 	}
 	if (num_streams == 1)
-		single_stream(use_tensor_core, matrix_size);
+		single_stream(use_tensor_core, matrix_size, repeats);
 	else
-		multi_stream(num_streams, use_tensor_core, matrix_size);
+		multi_stream(num_streams, use_tensor_core, matrix_size, repeats);
 
 	return 0;
 }

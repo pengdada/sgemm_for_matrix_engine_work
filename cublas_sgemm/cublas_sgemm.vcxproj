@@ -77,8 +77,10 @@
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
   <ItemGroup>
+    <None Include="get.sh" />
     <None Include="Makefile" />
     <None Include="debug.mak" />
+    <None Include="prof.sh" />
     <None Include="release.mak" />
     <None Include="cublas_sgemm-Debug.vgdbsettings" />
     <None Include="cublas_sgemm-Release.vgdbsettings" />
