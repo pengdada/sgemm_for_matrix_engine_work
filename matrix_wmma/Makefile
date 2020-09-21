@@ -17,5 +17,6 @@ test:
 	./$(TARGET)
 
 prof:
-	$(NVPROF) ./$(TARGET) 
-	$(NVPROF) --print-gpu-trace ./$(TARGET) 
+	$(NVPROF) ./$(TARGET) > /dev/null 2> log.txt
+	$(NVPROF) --print-gpu-trace ./$(TARGET)  > /dev/null 2>> log.txt 
+	cat log.txt
