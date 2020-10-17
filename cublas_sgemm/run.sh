@@ -2,15 +2,34 @@
 
 repeate=100
 
-./Release/cublas_sgemm 1 0 $repeate $((4096*4)) | tee log.txt
-mkdir result_gpu
-rm result_gpu/*
-mv log.txt result_gpu
-mv Power_data.txt result_gpu/power_data.gpu.csv
+function gemm()
+{
+	dtype=$1
+	size=$2
+
+	cmd="./Release/cublas_sgemm 1 0 $repeate $dtype $size | tee log.txt"
+	echo $cmd; eval $cmd;
+	dir=result.gpu.$dtype.$size
+	mkdir -p $dir
+	rm -f $dir/*
+	mv log.txt $dir/log.$dtype.$size.txt
+	mv Power_data.txt $dir/power_data.gpu.$dtype.$size.csv
 
 
-./Release/cublas_sgemm 1 1 $repeate $((4096*4)) | tee log.txt
-mkdir result_tensorcore
-rm result_tensorcore/*
-mv log.txt result_tensorcore
-mv Power_data.txt result_tensorcore/power_data.tensorcore.csv
+	cmd="./Release/cublas_sgemm 1 1 $repeate $dtype $size | tee log.txt"
+	echo $cmd; eval $cmd;
+	dir=result.tensorcore.$dtype.$size
+	mkdir -p $dir
+	rm -f $dir/*
+	mv log.txt $dir/log.$dtype.$size.txt
+	mv Power_data.txt $dir/power_data.tensorcore.$dtype.$size.csv
+}
+
+#dtype=2; gemm $dtype
+
+for ((s=1024; s<=1024*32; s *= 2)); do
+	for ((t=0; t<=2; t++)); do
+		gemm $t $s
+    done
+done
+

@@ -51,25 +51,151 @@ cublasStatus_t checkCublas(cublasStatus_t result)
 }
 
 // Fill the array A(nr_rows_A, nr_cols_A) with random numbers on CPU
-inline void CPU_fill_rand(float *A, int nr_rows_A, int nr_cols_A) {
+template<typename T>
+inline void CPU_fill_rand(T *A, int nr_rows_A, int nr_cols_A) {
 	int a = 1;
 
 	for (int i = 0; i < nr_rows_A * nr_cols_A; i++) {
-		A[i] = (float)rand() / (float)(RAND_MAX / a);
+		A[i] = (T)rand() / (T)(RAND_MAX / a);
 	}
 }
 
-int single_stream(int use_tensorcore, int matrix_size, int repeats = 10) {
+int single_stream_hgemm(int use_tensorcore, int matrix_size, int repeats = 10) {
 	int min_m_k_n = 2;
 	int max_m_k_n = 4096 * 4;
 	min_m_k_n = max_m_k_n = matrix_size;
 	int verbose = 1;
 
-#ifndef FP16MM
-	cout << "\ncublasSgemm test result:\n" << endl;
-#else
 	cout << "\ncublasHgemm test result:\n" << endl;
-#endif
+
+	if (verbose)
+		cout << "running with"
+		<< " min_m_k_n: " << min_m_k_n
+		<< " max_m_k_n: " << max_m_k_n
+		<< " use_tensor: " << use_tensorcore
+		<< " dType bits:" <<sizeof(__half)*8
+		<< " repeats: " << repeats
+		<< endl;
+
+	cublasStatus_t stat;
+	cublasHandle_t handle;
+
+	checkCublas(cublasCreate(&handle));
+	if (use_tensorcore == 1) {
+		checkCublas(cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH));
+		//checkCublas(cublasSetMathMode(handle, CUBLAS_DEFAULT_MATH));
+		//checkCublas(cublasSetMathMode(handle, CUBLAS_TF32_TENSOR_OP_MATH));
+	}
+
+	if (verbose) cout << "allocating device variables" << endl;
+
+	// Allocate 3 arrays on CPU
+
+	float *h_A = (float *)malloc(max_m_k_n * max_m_k_n * sizeof(float));
+	float *h_B = (float *)malloc(max_m_k_n * max_m_k_n * sizeof(float));
+	float *h_C = (float *)malloc(max_m_k_n * max_m_k_n * sizeof(float));
+
+	float *h_hA = (float *)malloc(max_m_k_n * max_m_k_n * sizeof(__half));
+	float *h_hB = (float *)malloc(max_m_k_n * max_m_k_n * sizeof(__half));
+	float *h_hC = (float *)malloc(max_m_k_n * max_m_k_n * sizeof(__half));
+
+	CPU_fill_rand(h_A, max_m_k_n, max_m_k_n);
+	CPU_fill_rand(h_B, max_m_k_n, max_m_k_n);
+	CPU_fill_rand(h_C, max_m_k_n, max_m_k_n);
+
+	__half *d_A, *d_B, *d_C;
+	checkCuda(cudaMalloc(&d_A, max_m_k_n * max_m_k_n * sizeof(__half)));
+	checkCuda(cudaMalloc(&d_B, max_m_k_n * max_m_k_n * sizeof(__half)));
+	checkCuda(cudaMalloc(&d_C, max_m_k_n * max_m_k_n * sizeof(__half)));
+
+	for (int i = 0; i < max_m_k_n * max_m_k_n; i++) {
+		h_hA[i] = approx_float_to_half(h_A[i]);
+		h_hA[i] = approx_float_to_half(h_B[i]);
+		h_hA[i] = approx_float_to_half(h_C[i]);
+	}
+
+	checkCuda(cudaMemcpy(d_A, h_hA, max_m_k_n * max_m_k_n * sizeof(__half), cudaMemcpyHostToDevice));
+	checkCuda(cudaMemcpy(d_B, h_hB, max_m_k_n * max_m_k_n * sizeof(__half), cudaMemcpyHostToDevice));
+	checkCuda(cudaMemcpy(d_C, h_hC, max_m_k_n * max_m_k_n * sizeof(__half), cudaMemcpyHostToDevice));
+
+
+	int lda, ldb, ldc, m, n, k;
+	const __half alf = approx_float_to_half(1.0);
+	const __half bet = approx_float_to_half(0.0);
+	const __half *alpha = &alf;
+	const __half *beta = &bet;
+
+
+	cudaEvent_t start, stop;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+
+	const int size = min_m_k_n;
+	{
+		double sum = 0.0;
+
+		for (int rep = 0; rep < repeats; rep++) {
+
+			m = n = k = size;
+			lda = m;
+			ldb = k;
+			ldc = m;
+			if (rep == repeats - 1) {
+				nvmlAPIRun();
+				cudaEventRecord(start, 0);
+			}
+
+			stat = cublasHgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, alpha, d_A, lda, d_B, ldb, beta, d_C, ldc);	
+
+			cudaDeviceSynchronize();
+			cudaEventRecord(stop, 0);
+			cudaEventSynchronize(stop);
+
+			if (rep == repeats - 1) {
+				float elapsed;
+				cudaEventElapsedTime(&elapsed, start, stop);
+				elapsed /= 1000.0f;
+				sum = elapsed;
+				nvmlAPIEnd();
+			}
+			if (stat != CUBLAS_STATUS_SUCCESS) {
+				cerr << "cublasSgemmBatched failed" << endl;
+				exit(1);
+			}
+			assert(!cudaGetLastError());
+
+			std::swap(d_A, d_C);
+
+		}
+
+		cout << "float16: size " << size << " average: " << sum << " s " << endl;
+
+	}
+
+	checkCuda(cudaMemcpy(h_hA, d_A, max_m_k_n * max_m_k_n * sizeof(__half), cudaMemcpyDeviceToHost));
+	checkCuda(cudaMemcpy(h_hB, d_B, max_m_k_n * max_m_k_n * sizeof(__half), cudaMemcpyDeviceToHost));
+	checkCuda(cudaMemcpy(h_hC, d_C, max_m_k_n * max_m_k_n * sizeof(__half), cudaMemcpyDeviceToHost));
+
+	//Free GPU memory
+	cudaFree(d_A);
+	cudaFree(d_B);
+	cudaFree(d_C);
+
+	// Free CPU memory
+	free(h_A);
+	free(h_B);
+	free(h_C);
+
+	return 0;
+}
+
+int single_stream_sgemm(int use_tensorcore, int matrix_size, int repeats = 10) {
+	int min_m_k_n = 2;
+	int max_m_k_n = 4096 * 4;
+	min_m_k_n = max_m_k_n = matrix_size;
+	int verbose = 1;
+
+	cout << "\ncublasSgemm test result:\n" << endl;
 
 	if (verbose)
 		cout << "running with"
@@ -77,6 +203,7 @@ int single_stream(int use_tensorcore, int matrix_size, int repeats = 10) {
 		<< " max_m_k_n: " << max_m_k_n
 		<< " use_tensor: "<< use_tensorcore
 		<< " repeats: " << repeats
+		<< " dType bits:" << sizeof(float) * 8
 		<< endl;
 
 	cublasStatus_t stat;
@@ -101,7 +228,6 @@ int single_stream(int use_tensorcore, int matrix_size, int repeats = 10) {
 	CPU_fill_rand(h_B, max_m_k_n, max_m_k_n);
 	CPU_fill_rand(h_C, max_m_k_n, max_m_k_n);
 
-#ifndef FP16MM
 	// Allocate 3 arrays on GPU
 	float *d_A, *d_B, *d_C;
 	checkCuda(cudaMalloc(&d_A, max_m_k_n * max_m_k_n * sizeof(float)));
@@ -118,26 +244,6 @@ int single_stream(int use_tensorcore, int matrix_size, int repeats = 10) {
 	const float *alpha = &alf;
 	const float *beta = &bet;
 
-#else
-
-	__half *d_A, *d_B, *d_C;
-	checkCuda(cudaMalloc(&d_A, max_m_k_n * max_m_k_n * sizeof(__half)));
-	checkCuda(cudaMalloc(&d_B, max_m_k_n * max_m_k_n * sizeof(__half)));
-	checkCuda(cudaMalloc(&d_C, max_m_k_n * max_m_k_n * sizeof(__half)));
-
-	for (int i = 0; i < max_m_k_n * max_m_k_n; i++) {
-		d_A[i] = approx_float_to_half(h_A[i]);
-		d_B[i] = approx_float_to_half(h_B[i]);
-		d_C[i] = approx_float_to_half(h_C[i]);
-	}
-
-	int lda, ldb, ldc, m, n, k;
-	const __half alf = approx_float_to_half(1.0);
-	const __half bet = approx_float_to_half(0.0);
-	const __half *alpha = &alf;
-	const __half *beta = &bet;
-
-#endif
 
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
@@ -157,11 +263,9 @@ int single_stream(int use_tensorcore, int matrix_size, int repeats = 10) {
 				nvmlAPIRun();
 				cudaEventRecord(start, 0);
 			}
-#ifndef FP16MM
+
 			stat = cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, alpha, d_A, lda, d_B, ldb, beta, d_C, ldc);
-#else
-			stat = cublasHgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, alpha, d_A, lda, d_B, ldb, beta, d_C, ldc);
-#endif			
+
 			cudaDeviceSynchronize();
 			cudaEventRecord(stop, 0);
 			cudaEventSynchronize(stop);
@@ -183,18 +287,135 @@ int single_stream(int use_tensorcore, int matrix_size, int repeats = 10) {
 	
 		}
 
-#ifndef FP16MM	
-		cout << "float32: size "
-#else
-		cout << "float16: size "
-#endif
-			<< size << " average: " << sum  << " s " << endl;
+		cout << "float32: size " << size << " average: " << sum  << " s " << endl;
 
 	}
 
 	checkCuda(cudaMemcpy(h_A, d_A, max_m_k_n * max_m_k_n * sizeof(float), cudaMemcpyDeviceToHost));
 	checkCuda(cudaMemcpy(h_B, d_B, max_m_k_n * max_m_k_n * sizeof(float), cudaMemcpyDeviceToHost));
 	checkCuda(cudaMemcpy(h_C, d_C, max_m_k_n * max_m_k_n * sizeof(float), cudaMemcpyDeviceToHost));
+
+	//Free GPU memory
+	cudaFree(d_A);
+	cudaFree(d_B);
+	cudaFree(d_C);
+
+	// Free CPU memory
+	free(h_A);
+	free(h_B);
+	free(h_C);
+
+	return 0;
+}
+
+int single_stream_dgemm(int use_tensorcore, int matrix_size, int repeats = 10) {
+	int min_m_k_n = 2;
+	int max_m_k_n = 4096 * 4;
+	min_m_k_n = max_m_k_n = matrix_size;
+	int verbose = 1;
+
+#ifndef FP16MM
+	cout << "\ncublasSgemm test result:\n" << endl;
+#else
+	cout << "\ncublasHgemm test result:\n" << endl;
+#endif
+
+	if (verbose)
+		cout << "running with"
+		<< " min_m_k_n: " << min_m_k_n
+		<< " max_m_k_n: " << max_m_k_n
+		<< " use_tensor: " << use_tensorcore
+		<< " repeats: " << repeats
+		<< " dType bits:" << sizeof(double) * 8
+		<< endl;
+
+	cublasStatus_t stat;
+	cublasHandle_t handle;
+
+	checkCublas(cublasCreate(&handle));
+	if (use_tensorcore == 1) {
+		checkCublas(cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH));
+		//checkCublas(cublasSetMathMode(handle, CUBLAS_DEFAULT_MATH));
+		//checkCublas(cublasSetMathMode(handle, CUBLAS_TF32_TENSOR_OP_MATH));
+	}
+
+	if (verbose) cout << "allocating device variables" << endl;
+
+	// Allocate 3 arrays on CPU
+
+	double *h_A = (double *)malloc(max_m_k_n * max_m_k_n * sizeof(double));
+	double *h_B = (double *)malloc(max_m_k_n * max_m_k_n * sizeof(double));
+	double *h_C = (double *)malloc(max_m_k_n * max_m_k_n * sizeof(double));
+
+	CPU_fill_rand(h_A, max_m_k_n, max_m_k_n);
+	CPU_fill_rand(h_B, max_m_k_n, max_m_k_n);
+	CPU_fill_rand(h_C, max_m_k_n, max_m_k_n);
+
+	// Allocate 3 arrays on GPU
+	double *d_A, *d_B, *d_C;
+	checkCuda(cudaMalloc(&d_A, max_m_k_n * max_m_k_n * sizeof(double)));
+	checkCuda(cudaMalloc(&d_B, max_m_k_n * max_m_k_n * sizeof(double)));
+	checkCuda(cudaMalloc(&d_C, max_m_k_n * max_m_k_n * sizeof(double)));
+
+	checkCuda(cudaMemcpy(d_A, h_A, max_m_k_n * max_m_k_n * sizeof(double), cudaMemcpyHostToDevice));
+	checkCuda(cudaMemcpy(d_B, h_B, max_m_k_n * max_m_k_n * sizeof(double), cudaMemcpyHostToDevice));
+	checkCuda(cudaMemcpy(d_C, h_C, max_m_k_n * max_m_k_n * sizeof(double), cudaMemcpyHostToDevice));
+
+	int lda, ldb, ldc, m, n, k;
+	const double alf = 1.0f;
+	const double bet = 0.0f;
+	const double *alpha = &alf;
+	const double *beta = &bet;
+
+	cudaEvent_t start, stop;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+
+	const int size = min_m_k_n;
+	{
+		double sum = 0.0;
+
+		for (int rep = 0; rep < repeats; rep++) {
+
+			m = n = k = size;
+			lda = m;
+			ldb = k;
+			ldc = m;
+			if (rep == repeats - 1) {
+				nvmlAPIRun();
+				cudaEventRecord(start, 0);
+			}
+
+			stat = cublasDgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, alpha, d_A, lda, d_B, ldb, beta, d_C, ldc);
+		
+			cudaDeviceSynchronize();
+			cudaEventRecord(stop, 0);
+			cudaEventSynchronize(stop);
+
+			if (rep == repeats - 1) {
+				float elapsed;
+				cudaEventElapsedTime(&elapsed, start, stop);
+				elapsed /= 1000.0f;
+				sum = elapsed;
+				nvmlAPIEnd();
+			}
+			if (stat != CUBLAS_STATUS_SUCCESS) {
+				cerr << "cublasSgemmBatched failed" << endl;
+				exit(1);
+			}
+			assert(!cudaGetLastError());
+
+			std::swap(d_A, d_C);
+
+		}
+
+		cout << "float64: size " << size << " average: " << sum << " s " << endl;
+
+	}
+
+	checkCuda(cudaMemcpy(h_A, d_A, max_m_k_n * max_m_k_n * sizeof(double), cudaMemcpyDeviceToHost));
+	checkCuda(cudaMemcpy(h_B, d_B, max_m_k_n * max_m_k_n * sizeof(double), cudaMemcpyDeviceToHost));
+	checkCuda(cudaMemcpy(h_C, d_C, max_m_k_n * max_m_k_n * sizeof(double), cudaMemcpyDeviceToHost));
 
 	//Free GPU memory
 	cudaFree(d_A);
@@ -400,16 +621,24 @@ int main(int argc, char ** argv) {
 	int num_streams = 1;
 	int use_tensor_core = 0;
 	int repeats = 1;
+	int dType = 0;
 	int matrix_size = 1024 * 1;
-	if (argc == 5) {
+	if (argc == 6) {
 		num_streams = atoi(argv[1]);
 		use_tensor_core = atoi(argv[2]);
 		repeats = atoi(argv[3]);
-		matrix_size = atoi(argv[4]);
+		dType = atoi(argv[4]);
+		matrix_size = atoi(argv[5]);
 	}
-	if (num_streams == 1)
-		single_stream(use_tensor_core, matrix_size, repeats);
-	else
+
+	if (num_streams == 1) {
+		if (dType == 0)
+			single_stream_sgemm(use_tensor_core, matrix_size, repeats);
+		else if (dType == 1)
+			single_stream_dgemm(use_tensor_core, matrix_size, repeats);
+		else if (dType == 2)
+			single_stream_hgemm(use_tensor_core, matrix_size, repeats);
+	}else
 		multi_stream(num_streams, use_tensor_core, matrix_size, repeats);
 
 	return 0;
