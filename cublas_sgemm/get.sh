@@ -1,4 +1,4 @@
-DIR=/home/pengdadi/projects/sgemm/cublas_sgemm
+DIR=$(echo ~)/projects/sgemm/cublas_sgemm
 NAME=res.nvvp
 
 #ssh -t localhost -p 10023 "cd ${DIR} && ./prof.sh"
